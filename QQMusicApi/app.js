@@ -52,8 +52,9 @@ fs.readdirSync(path.join(__dirname, 'routes')).forEach(file => {
       req.query = {
         ...req.query,
         ...req.body,
-        ownCookie: 1,
+        ownCookie: req.query.ownCookie ?? req.body?.ownCookie ?? (req.headers.cookie ? 1 : 0),
       };
+      if (!Number(req.query.ownCookie)) req.cookies = {...globalCookie.userCookie()};
       // qq 登录
       let uin = (req.cookies.uin || '');
       // login_type 2 微信登录
@@ -63,7 +64,7 @@ fs.readdirSync(path.join(__dirname, 'routes')).forEach(file => {
       req.cookies.uin = uin.replace(/\D/g, '');
       const func = RouterMap[path];
 
-      const args = {request, dataStatistics: dataHandle, feedback, cache, globalCookie};
+      const args = {request, dataStatistics: dataHandle, feedback, cache, globalCookie, renewalStatus: () => cookieRenewal.snapshot()};
       router.post('/', (req, res) => func({req, res, ...args}));
       router.get('/', (req, res) => func({req, res, ...args}));
       if (corsMap[`/${filename}${path}`]) {

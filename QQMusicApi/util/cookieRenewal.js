@@ -4,11 +4,13 @@ module.exports = function cookieRenewal({ globalCookie, url, request = fetch, re
   let busy = false;
   let stopped = false;
   let controller;
+  let status = {state:'waiting', checkedAt:null, renewedAt:null};
   async function refresh() {
     if (busy || stopped) return;
     const cookie = { ...globalCookie.userCookie() };
     if (!cookie.uin || !(cookie.qm_keyst || cookie.qqmusic_key) || Number(cookie.login_type) === 2 || (!cookie.psrf_qqopenid && cookie.wxopenid)) return;
     busy = true;
+    status = {...status,state:'refreshing',checkedAt:new Date().toISOString()};
     controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
     try {
@@ -23,9 +25,10 @@ module.exports = function cookieRenewal({ globalCookie, url, request = fetch, re
       const all = { ...globalCookie.allCookies(), [cookie.uin]: renewed };
       globalCookie.updateAllCookies(all);
       globalCookie.updateUserCookie(renewed);
+      status = {...status,state:'renewed',renewedAt:new Date().toISOString()};
       report('QQ音乐登录自动续期成功，新密钥已保存。');
     } catch (_) {
-      if (!stopped) report('QQ音乐登录自动续期未成功，保留原 Cookie；不影响当前登录状态。');
+      if (!stopped) { status = {...status,state:'failed'}; report('QQ音乐自动续期未成功，已保留原 Cookie；登录是否有效以账号验证结果为准。'); }
     } finally {
       clearTimeout(timeout);
       busy = false;
@@ -35,5 +38,5 @@ module.exports = function cookieRenewal({ globalCookie, url, request = fetch, re
   const interval = setInterval(refresh, 4 * 60 * 60 * 1000);
   startup.unref();
   interval.unref();
-  return { refresh, stop() { stopped = true; clearTimeout(startup); clearInterval(interval); controller?.abort(); } };
+  return { refresh, snapshot: () => ({...status}), stop() { stopped = true; clearTimeout(startup); clearInterval(interval); controller?.abort(); } };
 };

@@ -4,13 +4,13 @@
 
 支持网易云音乐和 QQ 音乐。管理员可以控制播放、调整音量和输出设备、管理队列、切换背景歌单，并设置定时播放任务。
 
-本文按 **v1.0.19** 编写：支持双平台歌单管理、QQ 私人雷达、歌曲响度均衡、管理端控制设置，以及带独立进度窗口的自动更新。推荐普通用户使用 Windows 安装包；源码运行和构建步骤单独列在下文。
+本文按 **v1.0.20** 编写：支持双平台歌单管理、QQ 私人雷达、歌曲响度均衡、管理端控制设置，以及带独立进度窗口的自动更新。推荐普通用户使用 Windows 安装包；源码运行和构建步骤单独列在下文。
 
 ## Windows 桌面版
 
 桌面版面向 Windows 10/11 x64，安装包名为 `Jukebox-Setup-<版本>-x64.exe`。安装包内置运行环境和 mpv，使用者无需安装 Node.js 或执行启动脚本。
 
-**[下载 Windows x64 安装程序 v1.0.19](https://github.com/sangui0312/jukebox-/releases/download/v1.0.19/Jukebox-Setup-1.0.19-x64.exe)** · **[查看最新版本说明与校验文件](https://github.com/sangui0312/jukebox-/releases/latest)**
+**[下载 Windows x64 安装程序 v1.0.20](https://github.com/sangui0312/jukebox-/releases/download/v1.0.20/Jukebox-Setup-1.0.20-x64.exe)** · **[查看最新版本说明与校验文件](https://github.com/sangui0312/jukebox-/releases/latest)**
 
 源码可通过本仓库的 **Code → Download ZIP** 下载，或使用下文的 Git 命令获取。安装程序位于 Release 的 **Assets**，不需要下载整个源码仓库。
 
@@ -63,7 +63,7 @@ v1.0.14 及更早版本仍按旧界面提示自行退出一次，升级后才使
 
 桌面用户数据保存在 `%APPDATA%/JukeboxDesktop`，可通过“用户数据”按钮打开。其中 `server/` 保存配置、队列和定时任务，`qq/` 保存 QQ Cookie。桌面版首次使用独立数据目录，不自动导入源码版的账号与队列；覆盖安装和默认卸载保留用户数据。
 
-安装包未做代码签名，Windows 可能显示未知发布者提示。请从本仓库 Release 下载，并使用同名 `.sha256` 文件核对安装程序；PowerShell 中可运行 `Get-FileHash -Algorithm SHA256 -LiteralPath './Jukebox-Setup-1.0.19-x64.exe'`。
+安装包未做代码签名，Windows 可能显示未知发布者提示。请从本仓库 Release 下载，并使用同名 `.sha256` 文件核对安装程序；PowerShell 中可运行 `Get-FileHash -Algorithm SHA256 -LiteralPath './Jukebox-Setup-1.0.20-x64.exe'`。
 
 安装包包含第三方运行组件，其许可文件保存在安装目录的 `resources/licenses`，Electron 的许可文件位于安装目录。mpv、FFmpeg 版本、上游源码和构建来源记录在 [desktop/mpv-source.json](desktop/mpv-source.json)。
 
@@ -324,9 +324,13 @@ Cookie 让音乐接口使用你的登录状态。仅能搜索或查看榜单，�
 
 - 桌面版：网易云 Cookie 保存到 `%APPDATA%/JukeboxDesktop/server/config.local.js`，QQ 音乐 Cookie 保存到 `%APPDATA%/JukeboxDesktop/qq/cookie.json`。这些目录由程序创建。
 - 源码版：网易云 Cookie 保存到 `server/config.local.js`，首次使用前需创建该文件；QQ 音乐 Cookie 保存到 `QQMusicApi/data/cookie.json`。
-- QQ 音乐的“已配置”仅表示本地 Cookie 文件存在，不等于平台已验证登录态有效。
+- v1.0.20 起，QQ 音乐状态会区分“已登录”“登录已过期”和“已保存，暂未验证”；网络不可达不会被误判为已退出登录。
 
-Cookie 可能被平台判定过期或失效，程序不能保证永久有效。失效后重新登录并保存新的 Cookie。Cookie 是账号凭据，分享日志或备份时不要公开其值。
+QQ Cookie 使用原子写入和本地 `.bak` 备份，主文件损坏或丢失时可恢复备份。后台请求默认使用已保存账号；重新登录或续期后，音源缓存按凭据隔离，避免继续使用旧凭据对应的链接。
+
+桌面版会保存验证成功的官方浏览器登录会话，启动及每 10 分钟检查一次，并在每 4 小时尝试刷新官方页面。后台自动续期仍在启动及每 4 小时执行；续期失败不会清空 Cookie。官方会话仍有效时可自动恢复同一账号的新凭据，恢复请求不会覆盖稍后手动登录的账号。
+
+本机保存浏览器会话不能延长 QQ 服务端的凭据有效期；平台撤销全部会话或要求验证时，仍需在管理台重新登录。旧版已经丢失的浏览器会话也需要重新登录一次。Cookie 是账号凭据，分享日志或备份时不要公开其值。
 
 ## 定时播放
 

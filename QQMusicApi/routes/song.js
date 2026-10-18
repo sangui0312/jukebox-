@@ -39,10 +39,9 @@ const song = {
 
   '/url': async ({req, res, request, cache, globalCookie}) => {
     const obj = {...req.query, ...req.body};
-    let {uin, qqmusic_key} = globalCookie.userCookie();
-    if (Number(obj.ownCookie)) {
-      uin = req.cookies.uin || uin;
-    }
+    const credential = Number(obj.ownCookie) ? req.cookies : globalCookie.userCookie();
+    const {uin} = credential;
+    const qqmusic_key = credential.qqmusic_key || credential.qm_keyst;
 
     const {id, type = '128', mediaId = id, isRedirect = '0'} = obj;
     const typeMap = {
@@ -86,7 +85,8 @@ const song = {
 
     let purl = '';
     let count = 0;
-    let cacheKey = `song_url_${file}`;
+    const identity = require('crypto').createHash('sha256').update(JSON.stringify([uin,qqmusic_key])).digest('hex');
+    let cacheKey = `song_url_${identity}_${file}`;
     let cacheData = cache.get(cacheKey);
     if (cacheData) {
       return res.send(cacheData);
@@ -130,11 +130,12 @@ const song = {
           }),
         },
       });
-      if (res && !result.req_0.data) {
-        return res.send({
+      if (!result?.req_0?.data) {
+        if (res && !res.headersSent) res.send({
           result: 400,
           errMsg: '获取链接出错，建议检查是否携带 cookie ',
         });
+        return;
       }
       if (result.req_0 && result.req_0.data && result.req_0.data.midurlinfo) {
         purl = result.req_0.data.midurlinfo[0].purl;
@@ -166,18 +167,16 @@ const song = {
 
   '/urls': async ({req, res, request, globalCookie, cache}) => {
     const obj = {...req.query, ...req.body};
-    let uin = globalCookie.userCookie().uin;
-
-    if (Number(obj.ownCookie)) {
-      uin = req.cookies.uin || uin;
-    }
+    const credential = Number(obj.ownCookie) ? req.cookies : globalCookie.userCookie();
+    const uin = credential.uin;
 
     const {id = ''} = obj;
     const idArr = id.split(',');
     let count = 0;
     const idStr = idArr.map(id => `"${id}"`).join(',');
 
-    let cacheKey = `song_url_${idStr}`;
+    const identity = require('crypto').createHash('sha256').update(JSON.stringify([uin,credential.qqmusic_key || credential.qm_keyst])).digest('hex');
+    let cacheKey = `song_url_${identity}_${idStr}`;
     let cacheData = cache.get(cacheKey);
     if (cacheData) {
       return res.send(cacheData);

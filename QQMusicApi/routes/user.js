@@ -1,4 +1,5 @@
 const getSign = require('../util/sign');
+const {fingerprint} = require('../util/globalCookie');
 
 function parseCookieHeader(data) {
   const parsed = {};
@@ -13,6 +14,19 @@ function parseCookieHeader(data) {
 }
 
 const user = {
+  '/loginStatus': async ({res, globalCookie, renewalStatus = () => ({}), request}) => {
+    const cookie = globalCookie.userCookie();
+    const configured = !!cookie.uin && !!(cookie.qqmusic_key || cookie.qm_keyst);
+    const status = {configured, authenticated:null, fingerprint:fingerprint(cookie), accountIdentity:fingerprint(String(cookie.uin || '')), renewal:renewalStatus()};
+    if (!configured) return res.send({...status, authenticated:false, state:'unconfigured'});
+    try {
+      const result = await request({url:'https://u.y.qq.com/cgi-bin/musicu.fcg', method:'post', timeout:8000,
+        data:{comm:{ct:24,cv:0,format:'json'},req:{module:'music.UserInfo.userInfoServer',method:'GetLoginUserInfo',param:{}}}}, {throwOnError:true, useSavedCookie:true});
+      if (result?.code === 0 && result.req?.code === 0 && result.req.data?.info) return res.send({...status,authenticated:true,state:'valid'});
+      if (result?.code === 0 && [1000,1001].includes(result.req?.code)) return res.send({...status,authenticated:false,state:'expired'});
+      return res.send({...status,state:'unknown'});
+    } catch { return res.send({...status,state:'unreachable'}); }
+  },
   '/cookie': ({req, res, globalCookie}) => {
     res.send({
       result: 100,
@@ -99,7 +113,10 @@ const user = {
       });
     }
 
-    const allCookies = globalCookie.allCookies();
+    if (req.body.expectedFingerprint !== undefined && req.body.expectedFingerprint !== fingerprint(globalCookie.userCookie())) {
+      return res.send({result:409,errMsg:'账号信息已更新，已忽略旧的恢复请求'});
+    }
+    const allCookies = {...globalCookie.allCookies()};
     const userCookie = parseCookieHeader(data);
 
     if (Number(userCookie.login_type) === 2) {

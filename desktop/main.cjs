@@ -6,7 +6,7 @@ const { pathToFileURL } = require('url');
 const os = require('os');
 const { Services, validateMainPort } = require('./services.cjs');
 const { changedConfig } = require('./admin-key.cjs');
-const { NeteaseLogin, verifyQQLogin } = require('./netease-login.cjs');
+const { NeteaseLogin, verifyQQLogin, QQLoginKeeper } = require('./netease-login.cjs');
 const vm = require('vm');
 app.setName('JukeboxDesktop');
 app.commandLine.appendSwitch('lang', 'zh-CN');
@@ -17,6 +17,7 @@ let statusWindow, musicView, tray, manager, activePage = 'home', exiting = false
 let loginView, loginCapture, loginMessage = '点击登录后，在网易云官方页面完成登录。';
 let updates;
 let updateWindow;
+let qqKeeper, qqRefreshWindow;
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => showStatus());
@@ -56,6 +57,40 @@ async function initialize() {
   const runtimeDir = app.isPackaged ? path.join(process.resourcesPath, 'runtime') : path.join(__dirname, 'staging', 'runtime');
   const mpvPath = app.isPackaged ? path.join(process.resourcesPath, 'mpv', 'mpv.exe') : path.join(__dirname, 'vendor', 'mpv', 'mpv.exe');
   manager = new Services({ utilityProcess, runtimeDir, dataDir, mpvPath, ports: { main: mainPort, qq: 3400, netease: 4000 } });
+  if (app.isPackaged) {
+    const qqSession = session.fromPartition('persist:qq-login');
+    qqKeeper = new QQLoginKeeper({session:qqSession,
+      enabled:()=>!exiting && manager.state==='running' && !loginCapture?.active,
+      readStatus:async()=>{
+        const response=await fetch('http://127.0.0.1:'+manager.ports.qq+'/user/loginStatus',{signal:AbortSignal.timeout(10000)});
+        if(!response.ok)throw new Error('QQ服务未就绪');return response.json();
+      },
+      save:(cookie,expectedFingerprint)=>manager.enqueue(async()=>{
+        if(exiting || manager.state!=='running' || loginCapture?.active)return false;
+        const response=await fetch('http://127.0.0.1:'+manager.ports.qq+'/user/setCookie',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:cookie,expectedFingerprint}),signal:AbortSignal.timeout(8000)});
+        const result=await response.json();if(result.result===409)return false;
+        if(!response.ok || result.result!==100)throw new Error('保存失败');return true;
+      }),
+      refreshSession:async()=>{
+        if(qqRefreshWindow || exiting || loginCapture?.active)return;
+        const window=new BrowserWindow({show:false,webPreferences:{session:qqSession,sandbox:true,contextIsolation:true,nodeIntegration:false}});
+        qqRefreshWindow=window;
+        const allowed=url=>{try{const parsed=new URL(url);return parsed.protocol==='https:' && /(^|\.)qq\.com$/.test(parsed.hostname)}catch{return false}};
+        for(const event of ['will-navigate','will-redirect'])window.webContents.on(event,(event,url)=>{if(!allowed(url))event.preventDefault()});
+        window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
+        const deadline=setTimeout(()=>window.destroy(),12000);
+        try{
+          await window.loadURL('https://y.qq.com/');
+          if(!window.isDestroyed())await new Promise(resolve=>{
+            const done=()=>{clearTimeout(settle);window.removeListener('closed',done);resolve()};
+            const settle=setTimeout(done,4000);window.once('closed',done);
+          });
+        }finally{clearTimeout(deadline);if(!window.isDestroyed())window.destroy();if(qqRefreshWindow===window)qqRefreshWindow=undefined;}
+      },
+      report:message=>{loginMessage=message;musicView?.webContents.send('music:login-result',message);broadcast();}
+    });
+    qqKeeper.start();
+  }
   manager.on('state', state => {
     // Protocol state only: upstream stdout, requests, cookies and signed URLs are excluded.
     const entry = JSON.stringify({ time: new Date().toISOString(), state: state.state, services: state.services });
@@ -194,7 +229,7 @@ async function run(operation) {
 async function quit() {
   if (exiting) return;
   exiting = true;
-  try { loginCapture?.stop(); await manager?.stop(); musicView?.webContents.close(); loginView?.webContents.close(); tray?.destroy(); allowExit = true; updates?.installOnExit(); app.quit(); }
+  try { loginCapture?.stop(); qqKeeper?.stop(); qqRefreshWindow?.destroy(); await manager?.stop(); musicView?.webContents.close(); loginView?.webContents.close(); tray?.destroy(); allowExit = true; updates?.installOnExit(); app.quit(); }
   catch (error) { exiting = false; allowExit = false; if (['ready', 'installing'].includes(updates?.snapshot().status)) updates.fail(); manager.error = error.message; manager.changed('failed'); showStatus(); }
 }
 app.on('before-quit', event => { if (!allowExit) { event.preventDefault(); quit(); } });

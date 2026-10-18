@@ -1217,8 +1217,8 @@ onUnmounted(() => { socket?.close(); removeLoginListener?.(); });
               <div class="mb-2 flex items-center justify-between">
                 <span class="text-sm font-medium text-blue-300">🐧 QQ音乐</span>
                 <div class="flex items-center gap-2 text-xs">
-                  <span :class="cookieStatus?.qq?.configured ? 'text-emerald-400' : 'text-amber-400'">
-                    {{ cookieStatus?.qq?.configured ? '已配置' : '未配置' }}
+                  <span :class="cookieStatus?.qq?.authenticated === true ? 'text-emerald-400' : 'text-amber-400'">
+                    {{ !cookieStatus?.qq?.configured ? '未配置' : cookieStatus?.qq?.authenticated === true ? '已登录' : cookieStatus?.qq?.state === 'expired' ? '登录已过期' : '已保存，暂未验证' }}
                   </span>
                   <button
                     class="rounded-md px-2.5 py-1"
@@ -1230,7 +1230,9 @@ onUnmounted(() => { socket?.close(); removeLoginListener?.(); });
                 </div>
               </div>
               <button v-if="desktopLogin" class="rounded-lg bg-indigo-600 px-3 py-2 text-sm text-white hover:bg-indigo-500" @click="doPlatformLogin('qq')">登录QQ音乐</button>
-              <template v-else>
+              <p v-if="cookieStatus?.qq?.state === 'expired'" class="mt-2 text-xs text-amber-300" role="status">QQ 平台已使登录失效，原 Cookie 仍保留。桌面版会尝试从官方登录会话恢复；仍未恢复时请重新登录。</p>
+              <p v-else-if="cookieStatus?.qq?.renewal?.state === 'failed'" class="mt-2 text-xs text-slate-400">最近自动续期未成功，原 Cookie 已保留；账号有效性以登录验证结果为准。</p>
+              <template v-if="!desktopLogin">
               <textarea
                 v-model="qqCookieInput"
                 rows="3"

@@ -42,7 +42,7 @@ module.exports = (req, res, {globalCookie} = {}) => {
         delete obj.data;
       }
 
-      const cookieObj = (Number(req.query.ownCookie) ? req.cookies : userCookie) || {};
+      const cookieObj = (!opts.useSavedCookie && Number(req.query.ownCookie) ? req.cookies : userCookie) || {};
       obj.headers = obj.headers || {};
       obj.xsrfCookieName = 'XSRF-TOKEN';
       obj.withCredentials = true;
@@ -65,6 +65,7 @@ module.exports = (req, res, {globalCookie} = {}) => {
 
       return response.data;
     } catch (err) {
+      if (opts.throwOnError) throw err;
       res.send({
         result: 400,
         errMsg: `系统异常：${err.message}`,

@@ -350,13 +350,20 @@ function createRouter(io, player, playNext, system) {
         /* 探测失败 */
       }
     }
-    // QQ cookie 文件存在性
+    // 文件存在不等于登录有效，查询 QQ API 的实际认证结果。
     const qqCookieFile = path.join(require('./paths').qqDir, 'cookie.json');
-    const qqConfigured = fs.existsSync(qqCookieFile);
+    let qqStatus = {configured:fs.existsSync(qqCookieFile) || fs.existsSync(qqCookieFile + '.bak'), authenticated:null, state:'unreachable'};
+    try {
+      const response = await fetch(`${config.qqApiBase}/user/loginStatus`, {signal:AbortSignal.timeout(9000)});
+      if (response.ok) {
+        const status = await response.json();
+        qqStatus = {configured:!!status.configured,authenticated:status.authenticated,state:status.state,renewal:status.renewal};
+      }
+    } catch {}
     res.json({
       channels: state.channels,
       netease: { configured: !!config.neteaseCookie, account: neteaseAccount },
-      qq: { configured: qqConfigured },
+      qq: qqStatus,
     });
   });
 
