@@ -8,13 +8,13 @@ function api(path) {
   return `${config.qqApiBase}${path}`;
 }
 
-async function getJson(path, timeoutMs = 20000) {
+async function getJson(path, timeoutMs = 20000, signal) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(api(path), { signal: ctrl.signal });
+    const res = await fetch(api(path), { signal: signal ? AbortSignal.any([ctrl.signal,signal]) : ctrl.signal });
     if (!res.ok) throw new Error(`QQ API ${path} -> HTTP ${res.status}`);
-    return res.json();
+    return await res.json();
   } finally {
     clearTimeout(timer);
   }
@@ -67,15 +67,17 @@ async function getSongDetail(songId) {
 }
 
 /** 实时取音源 URL（320k；失败回退 128k） */
-async function getSongUrl(songId) {
+async function getSongUrl(songId, {signal} = {}) {
   for (const type of ['320', '128']) {
     try {
-      const json = await getJson(`/song/url?id=${encodeURIComponent(songId)}&type=${type}`);
+      signal?.throwIfAborted();
+      const json = await getJson(`/song/url?id=${encodeURIComponent(songId)}&type=${type}`,20000,signal);
       const u = json.data;
       if (typeof u === 'string' && u.startsWith('http')) {
         return { url: u, freeTrial: false, br: type === '320' ? 320000 : 128000 };
       }
     } catch (e) {
+      signal?.throwIfAborted();
       /* 尝试下一档 */
     }
   }
@@ -137,8 +139,8 @@ async function getPlaylist(id) {
 }
 
 /** Personalized QQ radio (the “猜你喜欢” entry is radio id 99 in `/radio/category`). */
-async function getRadarSongs() {
-  const json = await getJson('/radio?id=99');
+async function getRadarSongs({signal} = {}) {
+  const json = await getJson('/radio?id=99',20000,signal);
   if (Number(json.result) !== 100) throw new Error(json.errMsg || 'QQ personalized radio unavailable');
   const data = json.data || {};
   const tracks = Array.isArray(data.tracks) ? data.tracks : [];
@@ -149,4 +151,5 @@ async function getRadarSongs() {
   return songs;
 }
 
-module.exports = { search, getSongDetail, getSongUrl, getChart, getPlaylist, getRadarSongs, searchPlaylists, getBackgroundPlaylist };
+async function getLoginStatus({signal} = {}) {return getJson('/user/loginStatus',9000,signal);}
+module.exports = { search, getSongDetail, getSongUrl, getChart, getPlaylist, getRadarSongs, searchPlaylists, getBackgroundPlaylist, getLoginStatus };

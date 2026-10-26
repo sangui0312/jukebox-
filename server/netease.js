@@ -17,7 +17,8 @@ function headers() {
 async function getJson(path, opts = {}) {
   // 搜索等公开接口匿名请求（避免触发网易云对登录态的搜索频率风控 405）
   const useCookie = opts.auth !== false;
-  const res = await fetch(api(path), { headers: useCookie ? headers() : {}, signal: AbortSignal.timeout(10000) });
+  const timeout = AbortSignal.timeout(10000);
+  const res = await fetch(api(path), { headers: useCookie ? headers() : {}, signal: opts.signal ? AbortSignal.any([timeout,opts.signal]) : timeout });
   if (!res.ok) throw new Error(`API ${path} -> HTTP ${res.status}`);
   return res.json();
 }
@@ -96,8 +97,8 @@ async function getSongDetail(songId) {
 }
 
 /** 实时取音源 URL（播放瞬间调用） */
-async function getSongUrl(songId) {
-  const json = await getJson(`/song/url?id=${songId}`);
+async function getSongUrl(songId, options = {}) {
+  const json = await getJson(`/song/url?id=${songId}`,options);
   const d = json.data && json.data[0];
   if (!d || !d.url) return null;
   return { url: d.url, freeTrial: !!d.freeTrialInfo, br: d.br };
@@ -134,8 +135,8 @@ async function searchPlaylists(keyword) {
 }
 
 /** 心动FM（私人FM）：按用户口味推荐，每次返回少量歌曲 */
-async function getFmSongs() {
-  const json = await getJson('/personal_fm');
+async function getFmSongs(options = {}) {
+  const json = await getJson('/personal_fm',options);
   return (json.data || []).map(mapSearchSong);
 }
 

@@ -8,7 +8,7 @@ const project = path.dirname(desktop);
 const staging = path.join(desktop, 'staging');
 // Only explicit runtime roots are copied. Git ownership is additionally checked.
 const allow = {
-  server: ['package.json', 'package-lock.json', 'config.local.example.js', 'channels.js', 'config.js', 'paths.js', 'index.js', 'logger.js', 'music.js', 'netease.js', 'persistence.js', 'player.js', 'playlist-input.js', 'qq.js', 'routes.js', 'scheduler.js', 'state.js', 'users.js'],
+  server: ['package.json', 'package-lock.json', 'config.local.example.js', 'channels.js', 'config.js', 'paths.js', 'index.js', 'logger.js', 'music.js', 'netease.js', 'persistence.js', 'player.js', 'playback-loop.js', 'playlist-input.js', 'qq.js', 'routes.js', 'scheduler.js', 'state.js', 'users.js'],
   QQMusicApi: ['package.json', 'package-lock.json', 'LICENSE', 'app.js', 'paths.js', 'bin/config.js', 'bin/www', 'routes', 'util', 'public', 'views'],
   'netease-api': ['package.json', 'package-lock.json']
 };
@@ -22,7 +22,7 @@ function copy(source, destination, relative, managed = true) {
   } else {
     if (managed && !tracked.has(relative)) {
       // New lifecycle modules are allowed before their first commit, but only at explicit roots.
-        if (!['server/paths.js', 'server/playlist-input.js', 'QQMusicApi/paths.js', 'QQMusicApi/package-lock.json', 'QQMusicApi/util/cookieRenewal.js'].includes(relative)) throw new Error('Unmanaged runtime input: ' + relative);
+        if (!['server/paths.js', 'server/playback-loop.js', 'server/playlist-input.js', 'QQMusicApi/paths.js', 'QQMusicApi/package-lock.json', 'QQMusicApi/util/cookieRenewal.js'].includes(relative)) throw new Error('Unmanaged runtime input: ' + relative);
     }
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.copyFileSync(source, destination);

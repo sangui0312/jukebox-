@@ -20,6 +20,7 @@ const persistence = require('./persistence');
 const logger = require('./logger');
 const scheduler = require('./scheduler');
 const createRouter = require('./routes');
+const PlaybackLoop = require('./playback-loop');
 
 const app = express();
 const server = http.createServer(app);
@@ -27,7 +28,8 @@ const io = new Server(server);
 
 app.use((req, res, next) => stopping ? res.status(503).json({ error: '服务正在停止' }) : next());
 app.use(express.json());
-app.use('/api', createRouter(io, player, playNext, { restart: doRestart, shutdown: doShutdown }));
+app.use('/api', createRouter(io, player, playNext, { restart: doRestart, shutdown: doShutdown,
+  pause: () => playback.pause(), resume: () => playback.resume(), skip: () => playback.skip(), playNow: () => playback.skip({resume:true}) }));
 
 // 同源部署：托管前端构建产物
 const distDir = path.join(__dirname, '..', 'web', 'dist');
@@ -40,86 +42,47 @@ app.get(/^(?!\/api\/).*/, (req, res) => {
 
 const broadcast = () => io.emit('state:update', state.snapshot());
 
-/** 播放循环（防重入） */
+/** 播放、加载和重试共享同一个暂停状态。 */
 let stopping = false;
 let shutdownPromise;
-let playing = false;
 const scheduledQueue = [];
 const scheduledReturnStack = [];
-let scheduledStopPending = false;
-async function playNext() {
-  if (playing || stopping) return;
-  playing = true;
-  scheduledStopPending = false;
-  let item;
+const playback = new PlaybackLoop({state,player,music,takeNext,
+  checkLogin:(platform,options)=>platform==='qq'?qq.getLoginStatus(options):null,
+  broadcast,
+  report:(item,error,message)=>logger.log('error',`歌曲《${item?.name || '推荐源'}》播放失败：${error.message}（${message || '稍后跳过，可随时暂停'}）`,'play'),
+  onStarted:(item,source)=>logger.log('info',`播放《${item.name}》- ${(item.artists || []).join('/') || '未知歌手'} [${item.platform || 'netease'}]${source.freeTrial?'（试听）':''}`,'play')
+});
+function playNext() {if(!stopping)return playback.next();}
+async function takeNext(signal,reserve) {
+  let result;
   if (scheduledQueue.length) {
-    item = scheduledQueue.shift();
+    return reserve({item:scheduledQueue.shift(),fromUser:false});
   } else if (scheduledReturnStack.length) {
-    item = scheduledReturnStack.pop();
+    const item=scheduledReturnStack.pop();return reserve({item,fromUser:!!item.requestedBy});
   } else {
+    let firstUser=state.userQueue[0];
     const r = state.nextSong();
     if (r.needFm || r.needQqRadar) {
-      // 个性推荐缓存空时，从对应平台异步拉取一批再取
-      try {
-        const songs = r.needFm ? await netease.getFmSongs() : await qq.getRadarSongs();
-        if (stopping) return;
-        if (r.needFm) state.fillFm(songs);
-        else state.fillQqRadar(songs);
-      } catch (e) {
-        console.log(`[${r.needFm ? 'FM' : 'QQ私人雷达'}] 拉取推荐失败: ` + e.message);
-      }
-      const r2 = state.nextSong();
-      item = r2.item || null;
-    } else {
-      item = r.item || null;
-    }
-  }
-  if (stopping) return;
-  if (!item) {
-    playing = false;
-    state.current = null;
-    broadcast();
-    return;
-  }
-  state.current = item;
-  state.clearSkipVotes(); // 换歌清空投票
-  refreshPlayback(); // 换歌后立即核算预计播完时间
-  broadcast();
-  playing = true;
-  try {
-    const u = await music.getSongUrl(item.platform || 'netease', item.songId);
-    if (stopping) return;
-    if (!u || !u.url) throw new Error('音源不可用（版权/VIP 限制或获取失败）');
-    if (u.freeTrial) console.log(`[试听] ${item.name} 仅返回试听片段`);
-    player.play(u.url);
-    logger.log('info', `播放《${item.name}》- ${item.artists.join('/') || '未知歌手'} [${item.platform || 'netease'}]${u.freeTrial ? '（试听）' : ''}`, 'play');
-  } catch (e) {
-    if (stopping) return;
-    logger.log('error', `歌曲《${item.name}》播放失败：${e.message}（自动跳过）`, 'play');
-    playing = false;
-    playNext(); // 容错：单曲失败自动跳过，绝不卡死队列
+      const songs = r.needFm ? await netease.getFmSongs({signal}) : await qq.getRadarSongs({signal});
+      signal.throwIfAborted();
+      if (r.needFm) state.fillFm(songs); else state.fillQqRadar(songs);
+      firstUser=state.userQueue[0];result=state.nextSong();
+    } else result=r;
+    return reserve({item:result.item || null,fromUser:!!result.item && result.item===firstUser});
   }
 }
 
-player.onEnd = (err) => {
-  if (err) console.log(`[播放器错误] ${err.message}`);
-  playing = false;
-  playNext();
-};
+player.onEnd = error => playback.ended(error);
 
 function playScheduled(task) {
   if (stopping) return;
-  if (state.current && !scheduledStopPending) {
+  if (playback.active && state.current && !playback.switching) {
     scheduledReturnStack.push(state.current);
   }
   scheduledQueue.push(task);
   logger.log('action', `定时播放《${task.name}》[${task.platform}]`, 'schedule');
-  if (player.isPlaying() && !scheduledStopPending) {
-    scheduledStopPending = true;
-    player.stop();
-  } else if (!player.isPlaying() && !playing) {
-    playNext();
-  }
+  if (playback.active) playback.skip();
   broadcast();
 }
 
@@ -210,7 +173,7 @@ const pauseTimer = setInterval(async () => {
   if (player.manualPaused) return; // 管理端主动暂停：不自动恢复
   try {
     const paused = await player.getPaused();
-    if (!stopping && paused === true) {
+    if (!stopping && playback.active && !player.manualPaused && paused === true) {
       logger.log('warn', '检测到意外暂停（可能音频设备切换/蓝牙断开），自动继续播放', 'play');
       player.resume();
     }
@@ -284,8 +247,7 @@ async function init() {
     console.log('----------------------------------------');
     if (config.autoStart) {
       // 自动播放：恢复的歌重播 / 无则播默认歌单
-      if (state.current) playCurrent();
-      else playNext();
+      playCurrent();
     } else {
       broadcast();
       logger.log('info', '启动默认暂停（不自动播放），可在管理台点击"开始播放"', 'system');
@@ -296,23 +258,7 @@ async function init() {
 
 /** 恢复播放：重播重启前正在播放的歌曲（方案 A） */
 async function playCurrent() {
-  if (stopping || playing) return;
-  const item = state.current;
-  if (!item) return;
-  playing = true;
-  try {
-    const u = await music.getSongUrl(item.platform || 'netease', item.songId);
-    if (stopping) return;
-    if (!u || !u.url) throw new Error('音源不可用');
-    player.play(u.url);
-    console.log(`[恢复播放] ${item.name} - ${item.artists.join('/') || '未知歌手'}`);
-  } catch (e) {
-    if (stopping) return;
-    console.log(`[恢复失败跳过] ${item.name}: ${e.message}`);
-    playing = false;
-    state.current = null;
-    playNext();
-  }
+  if (!stopping) return playback.resume();
 }
 
 function sendParent(message) {
@@ -322,6 +268,7 @@ function sendParent(message) {
 function shutdown() {
   if (shutdownPromise) return shutdownPromise;
   stopping = true;
+  playback.shutdown();
   clearInterval(playbackTimer);
   clearInterval(pauseTimer);
   clearInterval(heartbeatTimer);

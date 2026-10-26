@@ -74,11 +74,11 @@ class Player {
   }
 
   /** 播放一个 URL（自动停掉上一个） */
-  async play(url) {
-    if (this.stopping) return;
+  async play(url, {signal} = {}) {
+    if (this.stopping || signal?.aborted) return;
     const generation = ++this._generation;
     await this.stop();
-    if (generation !== this._generation || this.stopping) return;
+    if (generation !== this._generation || this.stopping || signal?.aborted) return;
     this._ended = false;
     this.paused = false;
     this.manualPaused = false;
@@ -111,7 +111,7 @@ class Player {
         if (this.onEnd) this.onEnd(err);
       }
     });
-    proc.on('exit', () => {
+    proc.on('exit', (code) => {
       if (generation !== this._generation) return;
       if (this.proc === proc) {
         this.proc = null;
@@ -119,7 +119,7 @@ class Player {
       }
       if (!this.stopping && !this._ended) {
         this._ended = true;
-        if (this.onEnd) this.onEnd();
+        if (this.onEnd) this.onEnd(code ? new Error('mpv 播放失败（退出码 '+code+'）') : undefined);
       }
     });
     // 延迟连接 IPC（等 mpv 建立管道）

@@ -37,6 +37,10 @@ const audioDevices = ref([]);
 const audioCurrent = ref('auto');
 const skipRequired = ref(8);
 const boostRequired = ref(3);
+const skipDirty = ref(false);
+const boostDirty = ref(false);
+const skipSaving = ref(false);
+const boostSaving = ref(false);
 const controlDraft = ref({ maxPerUser: 10, maxUserQueue: 300, autoStart: false, loudnessNormalization: true });
 const controlReady = ref(false);
 const controlDirty = ref(false);
@@ -111,8 +115,8 @@ async function refreshAll() {
       controlReady.value = true;
     }
     queue.value = status.value.userQueue || [];
-    if (status.value.skip?.required) skipRequired.value = status.value.skip.required;
-    if (status.value.boostRequired) boostRequired.value = status.value.boostRequired;
+    if (!skipDirty.value && !skipSaving.value && status.value.skip?.required) skipRequired.value = status.value.skip.required;
+    if (!boostDirty.value && !boostSaving.value && status.value.boostRequired) boostRequired.value = status.value.boostRequired;
     users.value = (await adminGetUsers()).users || [];
   } catch (e) {
     showToast(e.message);
@@ -458,9 +462,9 @@ async function doPause() {
   pausePending.value = true;
   ++statusRefreshId;
   try {
-    const running = !!status.value?.player?.running;
+    const running = !!(status.value?.player?.active ?? status.value?.player?.running);
     // 未播放 → 点按钮表示"开始播放"；播放中 → 暂停/继续切换
-    const target = running ? !status.value.player.paused : false;
+    const target = status.value?.playbackControl ? running : running ? !status.value.player.paused : false;
     const r = await adminPause(target);
     if (status.value) status.value.player.paused = r.paused;
     if (!running && !target) {
@@ -497,27 +501,35 @@ async function doSkip() {
 }
 
 async function doSetSkipRequired() {
+  if (skipSaving.value) return;
   const n = Number(skipRequired.value);
-  if (!n || n < 1 || n > 100) return showToast('请输入 1-100 的票数');
+  if (!Number.isInteger(n) || n < 1 || n > 100) return showToast('请输入 1-100 的整数票数');
+  skipSaving.value = true;
   try {
     const r = await adminSetSkipConfig(n);
+    skipRequired.value = r.required;
+    skipDirty.value = false;
     showToast(`跳过条件已改为 ${r.required} 票`);
-    refreshAll();
+    await refreshAll();
   } catch (e) {
     showToast(e.message);
-  }
+  } finally { skipSaving.value = false; }
 }
 
 async function doSetBoostRequired() {
+  if (boostSaving.value) return;
   const n = Number(boostRequired.value);
-  if (!n || n < 1 || n > 100) return showToast('请输入 1-100 的次数');
+  if (!Number.isInteger(n) || n < 1 || n > 100) return showToast('请输入 1-100 的整数次数');
+  boostSaving.value = true;
   try {
     const r = await adminSetBoostConfig(n);
+    boostRequired.value = r.required;
+    boostDirty.value = false;
     showToast(`顶歌条件已改为 ${r.required} 次`);
-    refreshAll();
+    await refreshAll();
   } catch (e) {
     showToast(e.message);
-  }
+  } finally { boostSaving.value = false; }
 }
 
 async function doRestart() {
@@ -603,7 +615,17 @@ onMounted(() => {
     refreshCookieStatus();
   });
   if (sessionStorage.getItem('jukebox_admin_key')) authed.value = true;
-  socket = connectSocket(() => refreshAll());
+  socket = connectSocket((snapshot) => {
+    // Loading/retry controls must update immediately, even when API health
+    // probes in adminStatus are still waiting for an unavailable service.
+    if (status.value && snapshot.playbackControl) {
+      ++statusRefreshId;
+      status.value = { ...status.value, ...snapshot, player: { ...status.value.player,
+        active: snapshot.playbackControl.active, paused: !snapshot.playbackControl.active } };
+      queue.value = snapshot.userQueue || [];
+    }
+    refreshAll();
+  });
   if (authed.value) {
     refreshAll();
     refreshPresets();
@@ -680,8 +702,8 @@ onUnmounted(() => { socket?.close(); removeLoginListener?.(); });
           </div>
           <div class="rounded-xl border border-slate-700/50 bg-slate-800/60 p-3">
             <p class="text-xs text-slate-500">播放器</p>
-            <p class="mt-1 text-sm font-medium" :class="status?.player.running ? 'text-emerald-400' : 'text-slate-400'">
-              {{ status?.player.running ? '● 运行中' : '○ 空闲' }}
+            <p class="mt-1 text-sm font-medium" :class="status?.player.active ? 'text-emerald-400' : 'text-slate-400'">
+              {{ status?.playbackControl?.phase === 'loading' ? '● 加载音源' : status?.playbackControl?.phase === 'retrying' ? '● 等待重试' : status?.player.running ? '● 运行中' : '○ 空闲' }}
               <span v-if="status?.player.paused" class="ml-1 text-amber-400">（已暂停）</span>
             </p>
           </div>
@@ -885,11 +907,11 @@ onUnmounted(() => { socket?.close(); removeLoginListener?.(); });
             <div class="flex items-center gap-2">
               <button
                 class="flex-1 rounded-lg py-2 text-sm font-medium transition"
-                :class="status?.player.running ? 'bg-slate-600 text-white hover:bg-slate-500' : 'bg-emerald-600 text-white hover:bg-emerald-500'"
+                :class="status?.player.active ? 'bg-slate-600 text-white hover:bg-slate-500' : 'bg-emerald-600 text-white hover:bg-emerald-500'"
                 :disabled="pausePending"
                 @click="doPause"
               >
-                {{ !status?.player.running ? '▶ 开始播放' : status?.player.paused ? '▶ 继续' : '⏸ 暂停' }}
+                {{ status?.playbackControl?.phase === 'blocked' ? '▶ 重试播放' : status?.player.active ? '⏸ 暂停' : status?.playbackControl?.phase === 'paused' ? '▶ 继续' : '▶ 开始播放' }}
               </button>
               <button
                 class="flex-1 rounded-lg bg-slate-600 py-2 text-sm font-medium text-white hover:bg-slate-500"
@@ -898,6 +920,7 @@ onUnmounted(() => { socket?.close(); removeLoginListener?.(); });
                 ⏭ 跳过
               </button>
             </div>
+            <p v-if="status?.playbackControl?.message" class="mt-2 text-xs text-amber-300" role="status">{{ status.playbackControl.message }}</p>
             <div class="mt-4">
               <div class="mb-1 flex justify-between text-xs text-slate-400">
                 <span>音量</span><span class="text-slate-300">{{ status?.player.volume ?? 30 }}</span>
@@ -928,14 +951,17 @@ onUnmounted(() => { socket?.close(); removeLoginListener?.(); });
                 <div class="flex gap-1.5">
                   <input
                     v-model.number="skipRequired"
+                    :disabled="skipSaving"
+                    @input="skipDirty = true"
                     type="number" min="1" max="100"
                     class="w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm text-white outline-none"
                   />
                   <button
-                    class="shrink-0 rounded-lg bg-indigo-600 px-2.5 py-1.5 text-xs text-white hover:bg-indigo-500"
+                    class="shrink-0 rounded-lg bg-indigo-600 px-2.5 py-1.5 text-xs text-white hover:bg-indigo-500 disabled:opacity-50"
+                    :disabled="skipSaving"
                     @click="doSetSkipRequired"
                   >
-                    保存
+                    {{ skipSaving ? '保存中…' : '保存' }}
                   </button>
                 </div>
               </div>
@@ -944,14 +970,17 @@ onUnmounted(() => { socket?.close(); removeLoginListener?.(); });
                 <div class="flex gap-1.5">
                   <input
                     v-model.number="boostRequired"
+                    :disabled="boostSaving"
+                    @input="boostDirty = true"
                     type="number" min="1" max="100"
                     class="w-full rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm text-white outline-none"
                   />
                   <button
-                    class="shrink-0 rounded-lg bg-amber-600 px-2.5 py-1.5 text-xs text-white hover:bg-amber-500"
+                    class="shrink-0 rounded-lg bg-amber-600 px-2.5 py-1.5 text-xs text-white hover:bg-amber-500 disabled:opacity-50"
+                    :disabled="boostSaving"
                     @click="doSetBoostRequired"
                   >
-                    保存
+                    {{ boostSaving ? '保存中…' : '保存' }}
                   </button>
                 </div>
               </div>

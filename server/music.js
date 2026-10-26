@@ -28,8 +28,8 @@ async function getSongDetail(platform, songId) {
 }
 
 /** 实时音源 URL */
-async function getSongUrl(platform, songId) {
-  return provider(platform).getSongUrl(songId);
+async function getSongUrl(platform, songId, options) {
+  return provider(platform).getSongUrl(songId, options);
 }
 
 module.exports = { search, getSongDetail, getSongUrl };

@@ -1,6 +1,6 @@
 {
   "name": "jukebox-desktop",
-  "version": "1.0.20",
+  "version": "1.0.21",
   "private": true,
   "description": "局域网点歌机 Windows 桌面应用",
   "main": "main.cjs",

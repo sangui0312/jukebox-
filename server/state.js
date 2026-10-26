@@ -133,6 +133,7 @@ class State {
       queueLimits: { maxPerUser: config.maxPerUser, maxUserQueue: config.maxUserQueue },
       channels: this.channels,
       playback: this.playback,
+      playbackControl: this.playbackControl,
       version: this.version,
     };
   }

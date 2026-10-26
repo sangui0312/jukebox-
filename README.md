@@ -4,13 +4,13 @@
 
 支持网易云音乐和 QQ 音乐。管理员可以控制播放、调整音量和输出设备、管理队列、切换背景歌单，并设置定时播放任务。
 
-本文按 **v1.0.20** 编写：支持双平台歌单管理、QQ 私人雷达、歌曲响度均衡、管理端控制设置，以及带独立进度窗口的自动更新。推荐普通用户使用 Windows 安装包；源码运行和构建步骤单独列在下文。
+本文按 **v1.0.21** 编写：支持双平台歌单管理、QQ 私人雷达、歌曲响度均衡、管理端控制设置，以及带独立进度窗口的自动更新。本版修复登录失效时连续跳歌、加载音源时无法暂停，以及跳过和顶歌条件无法持久保存的问题。推荐普通用户使用 Windows 安装包；源码运行和构建步骤单独列在下文。
 
 ## Windows 桌面版
 
 桌面版面向 Windows 10/11 x64，安装包名为 `Jukebox-Setup-<版本>-x64.exe`。安装包内置运行环境和 mpv，使用者无需安装 Node.js 或执行启动脚本。
 
-**[下载 Windows x64 安装程序 v1.0.20](https://github.com/sangui0312/jukebox-/releases/download/v1.0.20/Jukebox-Setup-1.0.20-x64.exe)** · **[查看最新版本说明与校验文件](https://github.com/sangui0312/jukebox-/releases/latest)**
+**[下载 Windows x64 安装程序 v1.0.21](https://github.com/sangui0312/jukebox-/releases/download/v1.0.21/Jukebox-Setup-1.0.21-x64.exe)** · **[查看最新版本说明与校验文件](https://github.com/sangui0312/jukebox-/releases/latest)**
 
 源码可通过本仓库的 **Code → Download ZIP** 下载，或使用下文的 Git 命令获取。安装程序位于 Release 的 **Assets**，不需要下载整个源码仓库。
 
@@ -63,7 +63,7 @@ v1.0.14 及更早版本仍按旧界面提示自行退出一次，升级后才使
 
 桌面用户数据保存在 `%APPDATA%/JukeboxDesktop`，可通过“用户数据”按钮打开。其中 `server/` 保存配置、队列和定时任务，`qq/` 保存 QQ Cookie。桌面版首次使用独立数据目录，不自动导入源码版的账号与队列；覆盖安装和默认卸载保留用户数据。
 
-安装包未做代码签名，Windows 可能显示未知发布者提示。请从本仓库 Release 下载，并使用同名 `.sha256` 文件核对安装程序；PowerShell 中可运行 `Get-FileHash -Algorithm SHA256 -LiteralPath './Jukebox-Setup-1.0.20-x64.exe'`。
+安装包未做代码签名，Windows 可能显示未知发布者提示。请从本仓库 Release 下载，并使用同名 `.sha256` 文件核对安装程序；PowerShell 中可运行 `Get-FileHash -Algorithm SHA256 -LiteralPath './Jukebox-Setup-1.0.21-x64.exe'`。
 
 安装包包含第三方运行组件，其许可文件保存在安装目录的 `resources/licenses`，Electron 的许可文件位于安装目录。mpv、FFmpeg 版本、上游源码和构建来源记录在 [desktop/mpv-source.json](desktop/mpv-source.json)。
 
@@ -456,13 +456,15 @@ Get-Content -LiteralPath './server/logs/netease-api.log' -Encoding utf8 -Tail 50
 
 ### Cookie 已保存，歌曲仍被跳过
 
-可能是 Cookie 失效、会员或版权限制、网络异常，或平台未返回可用音源。不可播放歌曲会记录错误并尝试下一首。
+可能是 Cookie 失效、会员或版权限制、网络异常，或平台未返回可用音源。确认 QQ 登录已过期时立即暂停并提示重新登录；其他错误每隔 1 秒尝试下一首，连续失败 3 次后自动暂停，避免无限跳歌。暂停时失败的用户点歌会放回队列。
+
+加载音源、等待重试时也可以点击 **暂停**，中断当前请求并停止后续重试。重新登录或排除故障后，点击 **重试播放/继续** 恢复；新点歌不会自行解除暂停。
 
 先用少量不同歌曲测试，根据日志区分单曲不可用和整个渠道异常。QQ 音乐“已配置”不是有效登录保证。
 
 ### 歌曲播放失败，提示 HTTP 502 并自动跳过
 
-表示获取音源的 API 请求失败，可能与上游接口或网络有关，不能仅凭这一条日志判断 Cookie 已失效。v1.0.16 当前会直接跳过失败歌曲，不会自动重试该次请求。稍后重新点入同一首歌，并用其他歌曲判断是偶发故障还是整个平台异常；持续失败时检查网络、登录状态及系统日志。
+表示获取音源的 API 请求失败，可能与上游接口或网络有关，不能仅凭这一条日志判断 Cookie 已失效。程序记录原因后短暂等待再尝试下一首，连续失败会自动暂停。检查网络、登录状态及系统日志，排除故障后点击 **重试播放/继续**。
 
 ### 点歌归属或限额异常
 

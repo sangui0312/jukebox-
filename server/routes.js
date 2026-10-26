@@ -50,6 +50,26 @@ function savePresets(presets) {
   }
 }
 
+// Append explicit overrides so old configs, quoted keys and missing fields all
+// work. Commit the file before changing memory or reporting success.
+function saveVoteSettings(key, value) {
+  const cfgPath = require('./paths').configPath;
+  const tempPath = cfgPath + '.votes.tmp';
+  const settings = { skipRequired: config.skipRequired, boostRequired: config.boostRequired, [key]: value };
+  try {
+    const source = fs.existsSync(cfgPath) ? fs.readFileSync(cfgPath, 'utf8') : 'module.exports = {};\n';
+    const marker = /\/\/ BEGIN JUKEBOX_VOTE_SETTINGS[\s\S]*?\/\/ END JUKEBOX_VOTE_SETTINGS/;
+    const block = '// BEGIN JUKEBOX_VOTE_SETTINGS\n' + Object.entries(settings)
+      .map(([name, number]) => `module.exports.${name} = ${JSON.stringify(number)};`).join('\n') + '\n// END JUKEBOX_VOTE_SETTINGS';
+    const next = marker.test(source) ? source.replace(marker, () => block) : source + '\n' + block + '\n';
+    fs.writeFileSync(tempPath, next, 'utf8');
+    fs.renameSync(tempPath, cfgPath);
+  } catch (error) {
+    try { fs.unlinkSync(tempPath); } catch {}
+    throw error;
+  }
+}
+
 function createRouter(io, player, playNext, system) {
   const router = express.Router();
   const broadcast = () => io.emit('state:update', state.snapshot());
@@ -198,7 +218,7 @@ function createRouter(io, player, playNext, system) {
     if (r.shouldSkip) {
       // 达票：跳过当前，稍后触发播下一首
       logger.log('warn', `投票达 ${r.votes}/${r.required}，跳过当前歌曲`, 'vote');
-      player.stop();
+      if(system?.skip)system.skip();else player.stop();
       res.json({ ok: true, votes: r.votes, required: r.required, skipped: true });
       return;
     }
@@ -396,6 +416,7 @@ function createRouter(io, player, playNext, system) {
       player: {
         running: player.isPlaying(),
         paused: player.paused,
+        active: state.playbackControl?.active ?? player.isPlaying(),
         volume: player.volume,
         mpvPath: config.mpvPath,
       },
@@ -454,7 +475,9 @@ function createRouter(io, player, playNext, system) {
   router.post('/admin/pause', adminAuth, (req, res) => {
     const paused = !!(req.body && req.body.paused);
     if (paused) {
-      player.setPaused(true);
+      if(system?.pause)system.pause();else player.setPaused(true);
+    } else if (system?.resume) {
+      system.resume();
     } else if (player.isPlaying()) {
       player.setPaused(false);
     } else {
@@ -486,7 +509,7 @@ function createRouter(io, player, playNext, system) {
 
   /** POST /api/admin/skip 跳过当前（仅管理员；kill mpv → onEnd → 播下一首） */
   router.post('/admin/skip', adminAuth, (req, res) => {
-    player.stop();
+    if(system?.skip)system.skip();else player.stop();
     res.json({ ok: true });
   });
 
@@ -528,19 +551,11 @@ function createRouter(io, player, playNext, system) {
   /** POST /api/admin/skip-config {required} 修改投票跳过所需票数（持久化） */
   router.post('/admin/skip-config', adminAuth, (req, res) => {
     const n = Number(req.body && req.body.required);
-    if (Number.isNaN(n) || n < 1 || n > 100) return res.status(400).json({ error: 'required 需为 1-100' });
+    if (!Number.isInteger(n) || n < 1 || n > 100) return res.status(400).json({ error: 'required 需为 1-100 的整数' });
+    try { saveVoteSettings('skipRequired', n); }
+    catch { return res.status(500).json({ error: '跳过条件未保存，请检查用户数据目录的写入权限后重试' }); }
     state.setSkipRequired(n);
     config.skipRequired = n;
-    const cfgPath = require('./paths').configPath;
-    try {
-      if (fs.existsSync(cfgPath)) {
-        let content = fs.readFileSync(cfgPath, 'utf8');
-        content = content.replace(/(skipRequired:\s*)\d+/, `$1${n}`);
-        fs.writeFileSync(cfgPath, content);
-      }
-    } catch (e) {
-      // 持久化失败不阻塞
-    }
     broadcast();
     res.json({ ok: true, required: state.skipRequired });
   });
@@ -548,18 +563,10 @@ function createRouter(io, player, playNext, system) {
   /** POST /api/admin/boost-config {required} 修改顶歌所需次数（持久化） */
   router.post('/admin/boost-config', adminAuth, (req, res) => {
     const n = Number(req.body && req.body.required);
-    if (Number.isNaN(n) || n < 1 || n > 100) return res.status(400).json({ error: 'required 需为 1-100' });
+    if (!Number.isInteger(n) || n < 1 || n > 100) return res.status(400).json({ error: 'required 需为 1-100 的整数' });
+    try { saveVoteSettings('boostRequired', n); }
+    catch { return res.status(500).json({ error: '顶歌条件未保存，请检查用户数据目录的写入权限后重试' }); }
     config.boostRequired = n;
-    const cfgPath = require('./paths').configPath;
-    try {
-      if (fs.existsSync(cfgPath)) {
-        let content = fs.readFileSync(cfgPath, 'utf8');
-        content = content.replace(/(boostRequired:\s*)\d+/, `$1${n}`);
-        fs.writeFileSync(cfgPath, content);
-      }
-    } catch (e) {
-      // 持久化失败不阻塞
-    }
     broadcast();
     res.json({ ok: true, required: config.boostRequired });
   });
@@ -603,7 +610,9 @@ function createRouter(io, player, playNext, system) {
     const [item] = state.userQueue.splice(idx, 1);
     state.userQueue.unshift(item);
     state.bump();
-    if (player.isPlaying()) {
+    if (system?.playNow) {
+      system.playNow();
+    } else if (player.isPlaying()) {
       player.stop(); // 触发 onEnd → 播队首（目标歌）
     } else {
       playNext();
